@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* MaternalCare design system: eucalyptus, cream, refined teal, dusty rose */
+@layer base {
+  :root {
+    --cream: 40 33% 97%;
+    --background: 40 28% 97%;
+    --foreground: 195 18% 22%;
+    --card: 0 0% 100%;
+    --card-foreground: 195 18% 22%;
+    --primary: 186 32% 38%;
+    --primary-foreground: 40 40% 99%;
+    --secondary: 155 18% 92%;
+    --secondary-foreground: 195 20% 26%;
+    --muted: 150 14% 94%;
+    --muted-foreground: 195 12% 42%;
+    --accent: 350 28% 94%;
+    --accent-foreground: 340 22% 32%;
+    --border: 150 12% 88%;
+    --input: 150 12% 90%;
+    --ring: 186 32% 42%;
+    --radius: 0.875rem;
+    --eucalyptus: 156 22% 78%;
+    --eucalyptus-muted: 156 16% 88%;
+    --rose-soft: 350 32% 92%;
+    --rose-foreground: 340 25% 36%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
