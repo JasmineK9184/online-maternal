@@ -34,9 +34,9 @@ export async function fetchActivePatientProfiles<T extends Record<string, unknow
       .select(trimmed)
       .eq("role", "patient")
       .order("full_name", { ascending: true, nullsFirst: false });
-    return (fb.data ?? []) as T[];
+    return (fb.data ?? []) as unknown as T[];
   }
 
   if (res.error) return [];
-  return (res.data ?? []).filter((row) => !(row as { archived_at?: string | null }).archived_at) as T[];
+  return (res.data ?? []).filter((row) => !(row as { archived_at?: string | null }).archived_at) as unknown as T[];
 }

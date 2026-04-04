@@ -91,6 +91,15 @@ function dueReminderStageParagraph(week: number | null): string {
   );
 }
 
+/** Profile row for due/LMP matching; `archived_at` absent when DB has not migrated yet. */
+type DueReminderProfileRow = {
+  id: string;
+  full_name: string | null;
+  due_date: string | null;
+  lmp_date: string | null;
+  archived_at?: string | null;
+};
+
 /** Shared by GET (Vercel Cron, manual curl) and POST (Supabase pg_net http_post). */
 async function handleDueRemindersCron(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -119,7 +128,7 @@ async function handleDueRemindersCron(request: Request) {
     .not("due_date", "is", null)
     .eq("due_date", targetYmd);
 
-  let dueData = dueWithArch.data ?? [];
+  let dueData: DueReminderProfileRow[] = (dueWithArch.data ?? []) as DueReminderProfileRow[];
   if (dueWithArch.error && isMissingArchivedAtSchemaError(dueWithArch.error)) {
     const fb = await admin
       .from("profiles")
@@ -127,9 +136,9 @@ async function handleDueRemindersCron(request: Request) {
       .eq("role", "patient")
       .not("due_date", "is", null)
       .eq("due_date", targetYmd);
-    dueData = fb.data ?? [];
+    dueData = (fb.data ?? []) as DueReminderProfileRow[];
   } else if (!dueWithArch.error) {
-    dueData = dueData.filter((p) => !(p as { archived_at?: string | null }).archived_at);
+    dueData = dueData.filter((p) => !p.archived_at);
   }
 
   const lmpWithArch = await admin
@@ -140,7 +149,7 @@ async function handleDueRemindersCron(request: Request) {
     .not("lmp_date", "is", null)
     .eq("lmp_date", lmpDateStr);
 
-  let lmpData = lmpWithArch.data ?? [];
+  let lmpData: DueReminderProfileRow[] = (lmpWithArch.data ?? []) as DueReminderProfileRow[];
   if (lmpWithArch.error && isMissingArchivedAtSchemaError(lmpWithArch.error)) {
     const fb = await admin
       .from("profiles")
@@ -149,9 +158,9 @@ async function handleDueRemindersCron(request: Request) {
       .is("due_date", null)
       .not("lmp_date", "is", null)
       .eq("lmp_date", lmpDateStr);
-    lmpData = fb.data ?? [];
+    lmpData = (fb.data ?? []) as DueReminderProfileRow[];
   } else if (!lmpWithArch.error) {
-    lmpData = lmpData.filter((p) => !(p as { archived_at?: string | null }).archived_at);
+    lmpData = lmpData.filter((p) => !p.archived_at);
   }
 
   const profileRows = [...dueData, ...lmpData];
@@ -191,7 +200,7 @@ async function handleDueRemindersCron(request: Request) {
   const candidateUserIds = Array.from(new Set(reminderItems.map((i) => i.userId)));
   const candidateDates = Array.from(new Set(reminderItems.map((i) => i.dueDateStr)));
 
-  const profileQueryErrors = [dueRows.error, lmpRows.error].filter(Boolean).map((e) => e.message);
+  const profileQueryErrors = [dueWithArch.error, lmpWithArch.error].filter(Boolean).map((e) => e!.message);
 
   const { data: existing, error: existingErr } =
     candidateUserIds.length > 0 && candidateDates.length > 0
@@ -264,8 +273,8 @@ async function handleDueRemindersCron(request: Request) {
     serverTodayYmd: todayYmd,
     targetDueDate: targetYmd,
     /** Rows returned by profiles query (due_date = target). If 0, no patient matched — often TZ/calendar mismatch vs DB. */
-    matchedByDueDateQuery: dueRows.data?.length ?? 0,
-    matchedByLmpQuery: lmpRows.data?.length ?? 0,
+    matchedByDueDateQuery: dueWithArch.data?.length ?? 0,
+    matchedByLmpQuery: lmpWithArch.data?.length ?? 0,
     profileQueryErrors,
     dueRemindersLookupError: existingErr?.message ?? null,
     candidates: reminderItems.length,

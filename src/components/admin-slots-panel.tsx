@@ -152,10 +152,7 @@ export function AdminSlotsPanel({ initialSlots }: Props) {
     setDialogBusy(true);
     setMsg(null);
     const { kind, row } = dialog;
-    let res:
-      | { ok: true }
-      | { error: string | Record<string, string[] | undefined> }
-      | undefined;
+    let res: Awaited<ReturnType<typeof archiveAvailabilitySlot>>;
     if (kind === "archive") res = await archiveAvailabilitySlot({ id: row.id });
     else if (kind === "restore") res = await restoreAvailabilitySlot({ id: row.id });
     else res = await deleteAvailabilitySlot({ id: row.id });

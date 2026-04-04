@@ -44,7 +44,6 @@ export function createMailTransporter() {
     tls: {
       rejectUnauthorized: tlsRejectUnauthorized(),
     },
-    // @ts-expect-error Nodemailer passes this through to Node net/tls (prefer IPv4)
     family: 4,
   });
 }
