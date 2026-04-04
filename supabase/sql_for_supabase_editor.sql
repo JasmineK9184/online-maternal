@@ -47,10 +47,13 @@ CREATE TABLE public.appointments (
   patient_id UUID NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
   start_time TIMESTAMPTZ NOT NULL,
   end_time TIMESTAMPTZ NOT NULL,
-  status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'cancelled', 'completed')),
+  status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('pending', 'scheduled', 'cancelled', 'completed')),
   google_event_id TEXT,
+  patient_email TEXT,
   appointment_type TEXT NOT NULL,
   is_telehealth BOOLEAN NOT NULL DEFAULT FALSE,
+  booking_confirmation_sent_at TIMESTAMPTZ,
+  booking_approved_sent_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT appointments_time_order CHECK (end_time > start_time)
@@ -188,6 +191,9 @@ CREATE TABLE public.availability_slots (
 
 CREATE INDEX idx_availability_slots_start ON public.availability_slots (start_time);
 
+ALTER TABLE public.availability_slots
+  ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+
 ALTER TABLE public.appointments
   ADD COLUMN IF NOT EXISTS slot_id UUID REFERENCES public.availability_slots (id) ON DELETE SET NULL;
 
@@ -204,7 +210,8 @@ CREATE POLICY "availability_slots_select_unbooked"
   ON public.availability_slots FOR SELECT
   TO authenticated
   USING (
-    start_time > NOW()
+    archived_at IS NULL
+    AND start_time > NOW()
     AND NOT EXISTS (
       SELECT 1 FROM public.appointments a
       WHERE a.slot_id = availability_slots.id
@@ -248,3 +255,71 @@ FROM generate_series(0, 3) AS gs;
 -- UPDATE public.profiles
 -- SET role = 'admin'
 -- WHERE id = 'PASTE-YOUR-USER-UUID-HERE';
+
+
+-- ---------------------------------------------------------------------------
+-- SECTION 4 — profiles: LMP + phone (required by Health profile & booking hints)
+-- Run if you see: "Could not find the 'lmp_date' column of 'profiles'"
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS lmp_date DATE,
+  ADD COLUMN IF NOT EXISTS phone TEXT;
+
+COMMENT ON COLUMN public.profiles.lmp_date IS 'Last menstrual period (optional; used if due_date not set)';
+
+
+-- ---------------------------------------------------------------------------
+-- SECTION 4b — profiles.archived_at (admin archive / Users & Profile Settings)
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE public.profiles
+  ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_profiles_archived_at ON public.profiles (archived_at)
+  WHERE archived_at IS NOT NULL;
+
+
+-- ---------------------------------------------------------------------------
+-- SECTION 4c — appointments.archived_at (admin soft-archive from Manage Appointments)
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE public.appointments
+  ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_appointments_archived_at ON public.appointments (archived_at)
+  WHERE archived_at IS NOT NULL;
+
+COMMENT ON COLUMN public.appointments.archived_at IS 'When set, visit is hidden from patient dashboard and admin scheduling lists.';
+
+DROP POLICY IF EXISTS "availability_slots_select_unbooked" ON public.availability_slots;
+
+CREATE POLICY "availability_slots_select_unbooked"
+  ON public.availability_slots FOR SELECT
+  TO authenticated
+  USING (
+    archived_at IS NULL
+    AND start_time > NOW()
+    AND NOT EXISTS (
+      SELECT 1 FROM public.appointments a
+      WHERE a.slot_id = availability_slots.id
+        AND a.status <> 'cancelled'
+        AND a.archived_at IS NULL
+    )
+  );
+
+
+-- ---------------------------------------------------------------------------
+-- SECTION 5 — due_reminders (idempotent due-date emails from /api/cron/due-reminders)
+-- Run if PostgREST says: Could not find the table 'public.due_reminders'
+-- After CREATE: Supabase → Settings → API → Reload schema (or wait ~1 min).
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.due_reminders (
+  user_id UUID NOT NULL REFERENCES auth.users (id) ON DELETE CASCADE,
+  reminder_date DATE NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, reminder_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_due_reminders_date ON public.due_reminders (reminder_date);

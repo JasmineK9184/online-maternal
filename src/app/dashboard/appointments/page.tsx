@@ -1,6 +1,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { BookingWizard } from "@/components/booking-wizard";
+import {
+  AdminAppointmentsTable,
+  type AdminAppointmentRow,
+} from "@/components/dashboard/admin-appointments-table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { hasSupabaseEnv } from "@/lib/supabase/env";
@@ -15,10 +19,14 @@ type MyAppointment = {
   appointment_type: string;
 };
 
+type Search = { error?: string | string[] };
+
 function statusBadge(status: string) {
   const s = status.toLowerCase();
   if (s === "cancelled")
     return <Badge variant="destructive">Cancelled</Badge>;
+  if (s === "pending")
+    return <Badge variant="outline">Pending approval</Badge>;
   if (s === "completed")
     return <Badge variant="secondary">Completed</Badge>;
   if (s === "scheduled")
@@ -26,10 +34,23 @@ function statusBadge(status: string) {
   return <Badge variant="outline">{status}</Badge>;
 }
 
-export default async function AppointmentsPage() {
+export default async function AppointmentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Search>;
+}) {
   if (!hasSupabaseEnv()) {
     redirect("/dashboard");
   }
+
+  const sp = await searchParams;
+  const errRaw = sp.error;
+  const actionError =
+    typeof errRaw === "string"
+      ? errRaw
+      : Array.isArray(errRaw)
+        ? errRaw[0]
+        : undefined;
 
   const supabase = await createClient();
   const {
@@ -39,9 +60,71 @@ export default async function AppointmentsPage() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("due_date, lmp_date")
+    .select("due_date, lmp_date, role")
     .eq("id", user.id)
     .single();
+
+  const isAdmin = profile?.role === "admin";
+
+  if (isAdmin) {
+    const { data: allAppts, error: apptsErr } = await supabase
+      .from("appointments")
+      .select(
+        "id, patient_id, start_time, end_time, status, appointment_type, patient_email, is_telehealth, created_at"
+      )
+      .is("archived_at", null)
+      .order("start_time", { ascending: true });
+
+    if (apptsErr) {
+      console.error("[appointments] admin list:", apptsErr.message);
+    }
+
+    const list = allAppts ?? [];
+    const patientIds = [...new Set(list.map((a) => a.patient_id))];
+    const { data: profRows } =
+      patientIds.length > 0
+        ? await supabase.from("profiles").select("id, full_name").in("id", patientIds)
+        : { data: [] as { id: string; full_name: string | null }[] };
+
+    const nameById = new Map(
+      (profRows ?? []).map((p) => [p.id, p.full_name] as const)
+    );
+
+    const adminRows: AdminAppointmentRow[] = list.map((a) => ({
+      id: a.id,
+      patient_id: a.patient_id,
+      patient_name: nameById.get(a.patient_id) ?? null,
+      patient_email: a.patient_email ?? null,
+      appointment_type: a.appointment_type,
+      start_time: a.start_time,
+      end_time: a.end_time,
+      status: a.status,
+      is_telehealth: Boolean(a.is_telehealth),
+      created_at: a.created_at,
+    }));
+
+    return (
+      <div className="space-y-8">
+        <div>
+          <h1 className="font-display text-3xl font-semibold tracking-tight text-foreground">
+            Manage Appointments
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Review requests, approve visits, and notify patients by email. Archived visits are in{" "}
+            <Link
+              href="/dashboard/profile-settings"
+              className="font-medium text-[#4B7B7F] underline decoration-[#4B7B7F]/40 underline-offset-2 hover:decoration-[#4B7B7F]"
+            >
+              Profile Settings
+            </Link>{" "}
+            under <span className="font-medium text-foreground">Archived appointments</span>.
+          </p>
+        </div>
+
+        <AdminAppointmentsTable rows={adminRows} actionError={actionError} />
+      </div>
+    );
+  }
 
   const week = pregnancyWeekFromProfile(
     profile?.due_date ?? null,
@@ -52,6 +135,7 @@ export default async function AppointmentsPage() {
     .from("appointments")
     .select("id, start_time, end_time, status, appointment_type")
     .eq("patient_id", user.id)
+    .is("archived_at", null)
     .order("start_time", { ascending: true });
 
   const list = (myAppts ?? []) as MyAppointment[];
@@ -131,15 +215,6 @@ export default async function AppointmentsPage() {
           </ul>
         </CardContent>
       </Card>
-
-      <p className="text-sm text-muted-foreground">
-        <Link
-          href="/dashboard"
-          className="underline decoration-primary/40 underline-offset-2"
-        >
-          ← Dashboard
-        </Link>
-      </p>
     </div>
   );
 }

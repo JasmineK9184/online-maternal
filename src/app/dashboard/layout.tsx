@@ -1,6 +1,4 @@
-import { DashboardShell } from "@/components/dashboard/dashboard-shell";
 import { hasSupabaseEnv } from "@/lib/supabase/env";
-import { Suspense } from "react";
 import DashboardRoleShell from "./dashboard-role-shell";
 
 export default async function DashboardLayout({
@@ -12,17 +10,7 @@ export default async function DashboardLayout({
     return <>{children}</>;
   }
 
-  // Show a stable sidebar shell while the server fetches role.
-  // This avoids flicker and keeps availability/profile tabs consistent.
-  return (
-    <Suspense
-      fallback={
-        <DashboardShell isAdmin={null}>
-          <div className="text-sm text-muted-foreground">Loading dashboard…</div>
-        </DashboardShell>
-      }
-    >
-      <DashboardRoleShell>{children}</DashboardRoleShell>
-    </Suspense>
-  );
+  // Await role + shell on the server. A Suspense fallback here could stick forever if
+  // Supabase/session work never completes or streaming stalls; the layout is already async.
+  return <DashboardRoleShell>{children}</DashboardRoleShell>;
 }

@@ -10,6 +10,7 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        canvas: "var(--canvas)",
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
@@ -44,10 +45,16 @@ const config: Config = {
           foreground: "hsl(var(--rose-foreground))",
         },
         cream: "hsl(var(--cream))",
+        brand: {
+          primary: "hsl(var(--brand-primary))",
+          accent: "hsl(var(--brand-accent))",
+          alert: "hsl(var(--brand-alert))",
+        },
       },
       fontFamily: {
         sans: ["var(--font-sans)", "system-ui", "sans-serif"],
         serif: ["var(--font-serif)", "Georgia", "serif"],
+        display: ["var(--font-display)", "var(--font-serif)", "Georgia", "serif"],
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -56,6 +63,7 @@ const config: Config = {
         card: "1rem",
       },
       boxShadow: {
+        soft: "0 8px 30px rgb(0 0 0 / 0.04)",
         card:
           "0 4px 28px -6px hsl(160 18% 45% / 0.12), 0 2px 10px -4px hsl(160 15% 35% / 0.08)",
         "card-hover":

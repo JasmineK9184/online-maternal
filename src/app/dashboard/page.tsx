@@ -1,11 +1,13 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
-import { JourneyProgress } from "@/components/journey-progress";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  AdminControlTower,
+  type AdminActivityRow,
+} from "@/components/dashboard/admin-control-tower";
+import { PatientJourneyView } from "@/components/dashboard/patient-journey-view";
 import { SupabaseSetupNotice } from "@/components/supabase-setup-notice";
 import { hasSupabaseEnv } from "@/lib/supabase/env";
 import { createClient } from "@/lib/supabase/server";
+import { fetchActivePatientProfiles } from "@/lib/active-patients-query";
 import { pregnancyWeekFromProfile } from "@/lib/maternal";
 
 export default async function DashboardPage() {
@@ -36,83 +38,98 @@ export default async function DashboardPage() {
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
     tomorrow.setDate(today.getDate() + 1);
+    const todayStart = today.toISOString();
+    const tomorrowStart = tomorrow.toISOString();
 
-    const { data: todaysAppointments } = await supabase
-      .from("appointments")
-      .select("id,status,google_event_id")
-      .gte("start_time", today.toISOString())
-      .lt("start_time", tomorrow.toISOString());
+    const apptSelect =
+      "id, created_at, start_time, end_time, appointment_type, status, patient_id, patient_email, is_telehealth" as const;
 
-    const rows = todaysAppointments ?? [];
-    const totalBookingsToday = rows.filter((a) => a.status !== "cancelled")
-      .length;
-    const pendingRequests = rows.filter(
-      (a) => a.status === "scheduled" && !a.google_event_id
-    ).length;
+    const [pendingApptsRes, recentApptsRes, todaysApptsRes, patients] = await Promise.all([
+      supabase
+        .from("appointments")
+        .select(apptSelect)
+        .eq("status", "pending")
+        .is("archived_at", null)
+        .order("start_time", { ascending: true }),
+      supabase
+        .from("appointments")
+        .select(apptSelect)
+        .is("archived_at", null)
+        .order("created_at", { ascending: false })
+        .limit(35),
+      supabase
+        .from("appointments")
+        .select(apptSelect)
+        .is("archived_at", null)
+        .gte("start_time", todayStart)
+        .lt("start_time", tomorrowStart)
+        .order("start_time", { ascending: true }),
+      fetchActivePatientProfiles<{
+        id: string;
+        full_name: string | null;
+        phone: string | null;
+        due_date: string | null;
+        lmp_date: string | null;
+      }>(supabase, "id, full_name, phone, due_date, lmp_date"),
+    ]);
+    const todaysRaw = todaysApptsRes.data ?? [];
+    const todaysNonCancelled = todaysRaw.filter((a) => a.status !== "cancelled");
+    const pendingRaw = pendingApptsRes.data ?? [];
+    const recent = recentApptsRes.data ?? [];
+
+    const patientIdsForNames = Array.from(
+      new Set([
+        ...recent.map((r) => r.patient_id),
+        ...todaysNonCancelled.map((r) => r.patient_id),
+        ...pendingRaw.map((r) => r.patient_id),
+      ])
+    );
+    const { data: nameRows } =
+      patientIdsForNames.length > 0
+        ? await supabase.from("profiles").select("id, full_name").in("id", patientIdsForNames)
+        : { data: [] as { id: string; full_name: string | null }[] };
+
+    const nameById = new Map((nameRows ?? []).map((r) => [r.id, r.full_name]));
+
+    const toMetricAppt = (r: (typeof recent)[number]) => ({
+      id: r.id,
+      created_at: r.created_at,
+      start_time: r.start_time,
+      end_time: r.end_time,
+      appointment_type: r.appointment_type,
+      status: r.status,
+      patient_name: nameById.get(r.patient_id) ?? null,
+      patient_email: r.patient_email ?? null,
+      is_telehealth: Boolean(r.is_telehealth),
+    });
+
+    const todaysAppointments = todaysNonCancelled.map(toMetricAppt);
+    const pendingAppointments = pendingRaw.map(toMetricAppt);
+
+    const activity: AdminActivityRow[] = recent.map((r) => ({
+      id: r.id,
+      created_at: r.created_at,
+      start_time: r.start_time,
+      end_time: r.end_time,
+      appointment_type: r.appointment_type,
+      status: r.status,
+      patient_name: nameById.get(r.patient_id) ?? null,
+      patient_email: r.patient_email ?? null,
+      is_telehealth: Boolean(r.is_telehealth),
+    }));
+
+    const rawName = (profileRole?.full_name ?? "").trim();
+    const adminDisplayName = rawName ? `${rawName} Admin` : null;
 
     return (
-      <div className="space-y-8">
-        <div>
-          <h1 className="font-serif text-3xl font-semibold tracking-tight text-foreground">
-            Clinic Analytics
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {profileRole?.full_name
-              ? `Welcome back, ${profileRole.full_name}`
-              : "Welcome back"}
-          </p>
-        </div>
-
-        <Card className="border-border/40 shadow-card">
-          <CardHeader>
-            <CardTitle className="text-xl text-foreground">
-              Today&apos;s snapshot
-            </CardTitle>
-            <p className="text-sm font-normal text-muted-foreground">
-              Quick totals for the current day.
-            </p>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="rounded-2xl border border-border/40 bg-muted/20 p-4">
-                <p className="text-sm text-muted-foreground">
-                  Total bookings today
-                </p>
-                <p className="mt-1 text-2xl font-semibold text-foreground">
-                  {totalBookingsToday}
-                </p>
-              </div>
-              <div className="rounded-2xl border border-border/40 bg-muted/20 p-4">
-                <p className="text-sm text-muted-foreground">
-                  Pending requests
-                </p>
-                <p className="mt-1 text-2xl font-semibold text-foreground">
-                  {pendingRequests}
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <Button
-                asChild
-                variant="outline"
-                className="rounded-full border-border/80"
-              >
-                <Link href="/dashboard/availability">Availability</Link>
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-
-        <p className="text-sm text-muted-foreground">
-          <Link
-            href="/"
-            className="underline decoration-primary/40 underline-offset-2"
-          >
-            ← Home
-          </Link>
-        </p>
-      </div>
+      <AdminControlTower
+        adminName={adminDisplayName}
+        patients={patients}
+        todaysAppointments={todaysAppointments}
+        pendingAppointments={pendingAppointments}
+        availabilityHref="/dashboard/availability"
+        activity={activity}
+      />
     );
   }
 
@@ -122,92 +139,57 @@ export default async function DashboardPage() {
     .eq("id", user.id)
     .single();
 
+  const dueDateMissing = patientProfile?.due_date == null;
   const week = pregnancyWeekFromProfile(
     patientProfile?.due_date ?? null,
     patientProfile?.lmp_date ?? null
   );
 
+  let dailyTip: {
+    week_number: number;
+    title: string;
+    description: string | null;
+  } | null = null;
+
+  if (week !== null) {
+    const { data: tip } = await supabase
+      .from("milestones")
+      .select("week_number, title, description")
+      .lte("week_number", week)
+      .order("week_number", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    dailyTip = tip ?? null;
+  } else {
+    const { data: tip } = await supabase
+      .from("milestones")
+      .select("week_number, title, description")
+      .order("week_number", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    dailyTip = tip ?? null;
+  }
+
   const now = new Date().toISOString();
   const { data: nextAppt } = await supabase
     .from("appointments")
-    .select("id,start_time,appointment_type,status")
+    .select("id, start_time, appointment_type, status")
     .eq("patient_id", user.id)
     .neq("status", "cancelled")
+    .is("archived_at", null)
     .gte("start_time", now)
     .order("start_time", { ascending: true })
     .limit(1)
     .maybeSingle();
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="font-serif text-3xl font-semibold tracking-tight text-foreground">
-          Your space
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {profileRole?.full_name
-            ? `Welcome back, ${profileRole.full_name}`
-            : "We’re glad you’re here"}
-        </p>
-      </div>
-
-      <Card className="border-border/40 shadow-card">
-        <CardHeader>
-          <CardTitle className="text-xl text-foreground">Your journey</CardTitle>
-          <p className="text-sm font-normal text-muted-foreground">
-            A gentle view of where you are and what&apos;s typical at each stage.
-          </p>
-        </CardHeader>
-        <CardContent>
-          <JourneyProgress week={week} />
-        </CardContent>
-      </Card>
-
-      <Card className="border-border/40 shadow-card">
-        <CardHeader>
-          <CardTitle className="text-xl text-foreground">Your next appointment</CardTitle>
-          <p className="text-sm font-normal text-muted-foreground">
-            A quick snapshot of what&apos;s coming up.
-          </p>
-        </CardHeader>
-        <CardContent>
-          {!nextAppt ? (
-            <p className="text-sm text-muted-foreground">
-              Nothing scheduled yet. Book a visit when you&apos;re ready.
-            </p>
-          ) : (
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="font-medium text-foreground">{nextAppt.appointment_type}</p>
-                <p className="text-sm text-muted-foreground">
-                  {new Date(nextAppt.start_time).toLocaleString(undefined, {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  })}
-                </p>
-              </div>
-              <Button asChild variant="outline" className="w-fit rounded-full shrink-0">
-                <Link href="/dashboard/appointments">View appointments</Link>
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <div className="flex flex-wrap gap-3">
-        <Button asChild className="rounded-full">
-          <Link href="/dashboard/appointments">Book a visit</Link>
-        </Button>
-        <Button asChild variant="outline" className="rounded-full border-border/80">
-          <Link href="/dashboard/health-profile">Health profile</Link>
-        </Button>
-      </div>
-
-      <p className="text-sm text-muted-foreground">
-        <Link href="/" className="underline decoration-primary/40 underline-offset-2">
-          ← Home
-        </Link>
-      </p>
-    </div>
+    <PatientJourneyView
+      fullName={profileRole?.full_name ?? null}
+      week={week}
+      dueDateMissing={dueDateMissing}
+      nextAppt={nextAppt ?? null}
+      dailyTip={dailyTip}
+      hidePatientJourneyChrome={profileRole?.role === "admin"}
+    />
   );
 }

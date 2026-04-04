@@ -1,33 +1,44 @@
+import Link from "next/link";
 import { Flower2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 const MILESTONE_WEEKS = [8, 12, 20, 24, 28, 36, 40] as const;
 
 type Props = {
   week: number | null;
+  /** When true, surface the personalize CTA even if LMP infers a week. */
+  dueDateMissing?: boolean;
 };
 
-export function JourneyProgress({ week }: Props) {
+export function JourneyProgress({ week, dueDateMissing = false }: Props) {
   const pct = week === null ? 0 : Math.min(100, Math.max(0, (week / 40) * 100));
+  const showPersonalizeCard = week === null || dueDateMissing;
 
   return (
     <div className="space-y-6">
-      {week === null ? (
-        <div className="flex gap-4 rounded-2xl border border-dashed border-eucalyptus-muted bg-eucalyptus-muted/40 px-4 py-5 sm:px-5">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-rose-soft text-rose-foreground shadow-inner">
+      {showPersonalizeCard ? (
+        <div className="flex gap-4 rounded-2xl border border-dashed border-[#99B898]/50 bg-[#99B898]/10 px-4 py-5 sm:px-5">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-[#4B7B7F] shadow-sm">
             <Flower2 className="h-6 w-6" strokeWidth={1.5} aria-hidden />
           </div>
-          <div className="min-w-0 space-y-1">
-            <p className="font-serif text-base font-semibold text-foreground">
-              Personalize your care
-            </p>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              Add your estimated due date below so we can show your pregnancy week, a
-              gentle timeline of milestones, and visit suggestions that match where you
-              are in your journey.
-            </p>
+          <div className="min-w-0 flex-1 space-y-3">
+            <div className="space-y-1">
+              <p className="font-serif text-lg font-semibold text-foreground">
+                Let&apos;s personalize your care
+              </p>
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                Add your estimated due date in your health profile so we can tailor milestones, tips,
+                and visit suggestions to your timeline.
+              </p>
+            </div>
+            <Button asChild size="sm" className="rounded-full">
+              <Link href="/dashboard/health-profile">Go to health profile</Link>
+            </Button>
           </div>
         </div>
-      ) : (
+      ) : null}
+
+      {week !== null ? (
         <div className="space-y-2">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <p className="font-serif text-lg font-semibold text-foreground sm:text-xl">
@@ -41,7 +52,7 @@ export function JourneyProgress({ week }: Props) {
             </span>
           </div>
         </div>
-      )}
+      ) : null}
 
       <div className="relative pt-2">
         <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">

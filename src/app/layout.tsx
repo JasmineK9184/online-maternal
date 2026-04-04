@@ -1,17 +1,24 @@
 import type { Metadata } from "next";
-import { Nunito_Sans, Source_Serif_4 } from "next/font/google";
+import { Instrument_Serif, Inter, Playfair_Display } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 
-const nunito = Nunito_Sans({
+const inter = Inter({
   subsets: ["latin"],
   variable: "--font-sans",
   display: "swap",
 });
 
-const sourceSerif = Source_Serif_4({
+const instrumentSerif = Instrument_Serif({
   subsets: ["latin"],
+  weight: "400",
   variable: "--font-serif",
+  display: "swap",
+});
+
+const playfairDisplay = Playfair_Display({
+  subsets: ["latin"],
+  variable: "--font-display",
   display: "swap",
 });
 
@@ -29,7 +36,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${nunito.variable} ${sourceSerif.variable} min-h-screen font-sans`}
+        className={`${inter.variable} ${instrumentSerif.variable} ${playfairDisplay.variable} min-h-screen bg-canvas font-sans text-base antialiased`}
       >
         <Providers>{children}</Providers>
       </body>

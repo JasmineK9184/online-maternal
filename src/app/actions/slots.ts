@@ -2,11 +2,34 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { isMissingArchivedAtSchemaError } from "@/lib/active-patients-query";
 import { createClient } from "@/lib/supabase/server";
-import { createServiceClient } from "@/lib/supabase/admin";
-import { decryptRefreshToken } from "@/lib/crypto";
-import { createCalendarEventWithMeet } from "@/lib/google/calendar";
-import { sendEmailJS } from "@/lib/email/emailjs";
+import { sendMail } from "@/lib/mail";
+
+function getOrdinal(n: number) {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
+
+function formatLongDate(d: Date) {
+  const weekday = new Intl.DateTimeFormat("en-US", { weekday: "long" }).format(d);
+  const month = new Intl.DateTimeFormat("en-US", { month: "long" }).format(d);
+  return `${weekday}, ${month} ${getOrdinal(d.getDate())}`;
+}
+
+function formatTime(d: Date) {
+  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(d);
+}
 
 export type OpenSlot = {
   id: string;
@@ -17,13 +40,23 @@ export type OpenSlot = {
 
 export async function getOpenSlots(): Promise<{ slots: OpenSlot[]; error?: string }> {
   const supabase = await createClient();
-  const { data, error } = await supabase
+  const res = await supabase
     .from("availability_slots")
-    .select("id, start_time, end_time, label")
+    .select("id, start_time, end_time, label, archived_at")
     .order("start_time", { ascending: true });
 
-  if (error) return { slots: [], error: error.message };
-  return { slots: (data ?? []) as OpenSlot[] };
+  if (res.error && isMissingArchivedAtSchemaError(res.error)) {
+    const fb = await supabase
+      .from("availability_slots")
+      .select("id, start_time, end_time, label")
+      .order("start_time", { ascending: true });
+    if (fb.error) return { slots: [], error: fb.error.message };
+    return { slots: (fb.data ?? []) as OpenSlot[] };
+  }
+
+  if (res.error) return { slots: [], error: res.error.message };
+  const rows = (res.data ?? []).filter((r) => !(r as { archived_at?: string | null }).archived_at);
+  return { slots: rows as OpenSlot[] };
 }
 
 const bookSlotSchema = z.object({
@@ -31,6 +64,128 @@ const bookSlotSchema = z.object({
   appointmentType: z.string().min(1),
   telehealth: z.boolean(),
 });
+
+const requestAppointmentSchema = z.object({
+  appointmentType: z.string().min(1),
+  telehealth: z.boolean(),
+  startIso: z.string().min(1),
+  durationMinutes: z.coerce.number().int().min(15).max(240).default(30),
+});
+
+export async function requestAppointmentBooking(
+  input: z.infer<typeof requestAppointmentSchema>
+) {
+  const parsed = requestAppointmentSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.flatten().fieldErrors };
+
+  const start = new Date(parsed.data.startIso);
+  if (Number.isNaN(start.getTime())) {
+    return { error: "Invalid date or time." };
+  }
+
+  const durationMs = parsed.data.durationMinutes * 60_000;
+  const end = new Date(start.getTime() + durationMs);
+  if (end <= start) return { error: "Invalid visit length." };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.email) return { error: "Not signed in" };
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("full_name")
+    .eq("id", user.id)
+    .single();
+
+  if (start.getTime() < Date.now() - 60_000) {
+    return { error: "Please choose a date and time in the future." };
+  }
+
+  const { data: overlap } = await supabase
+    .from("appointments")
+    .select("id")
+    .eq("patient_id", user.id)
+    .neq("status", "cancelled")
+    .lt("start_time", end.toISOString())
+    .gt("end_time", start.toISOString())
+    .limit(1)
+    .maybeSingle();
+
+  if (overlap) {
+    return { error: "You already have an appointment overlapping this time." };
+  }
+
+  const { data: inserted, error: insertErr } = await supabase
+    .from("appointments")
+    .insert({
+      patient_id: user.id,
+      slot_id: null,
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      status: "pending",
+      appointment_type: parsed.data.appointmentType.trim(),
+      is_telehealth: parsed.data.telehealth,
+      google_event_id: null,
+      patient_email: user.email,
+    })
+    .select("id");
+
+  if (insertErr) {
+    return { error: insertErr.message };
+  }
+
+  const insertedId = inserted?.[0]?.id ?? null;
+  if (!insertedId) {
+    return { error: "Request created, but confirmation could not be tracked." };
+  }
+
+  const hasGmail =
+    Boolean(process.env.GMAIL_USER?.trim()) && Boolean(process.env.GMAIL_APP_PASSWORD?.trim());
+
+  if (!hasGmail) {
+    console.warn(
+      "[mail] Booking saved but email skipped: set GMAIL_USER and GMAIL_APP_PASSWORD in .env.local and restart dev."
+    );
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/appointments");
+    return { ok: true as const, emailSent: false, emailIssue: "missing_env" as const };
+  }
+
+  try {
+    const displayName = (profile?.full_name ?? "").trim() || "there";
+    const dateFormatted = formatLongDate(start);
+    const timeFormatted = formatTime(start);
+    const visitType = parsed.data.appointmentType.trim();
+    const body = [
+      `Good morning ${displayName}, your booking for ${visitType} on ${dateFormatted} at ${timeFormatted} was successful.`,
+      "",
+      "We have received your request and will email you again once it has been approved by the clinic.",
+      "",
+      "Thank you,",
+      "MaternalCare",
+    ].join("\n");
+    await sendMail({
+      to: user.email,
+      subject: "MaternalCare — booking received",
+      text: body,
+    });
+    await supabase
+      .from("appointments")
+      .update({ booking_confirmation_sent_at: new Date().toISOString() })
+      .eq("id", insertedId);
+  } catch (e) {
+    console.error("[mail] Booking notification email failed:", e);
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/appointments");
+    return { ok: true as const, emailSent: false, emailIssue: "smtp_failed" as const };
+  }
+
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/appointments");
+  return { ok: true as const, emailSent: true };
+}
 
 export async function bookSlotAppointment(input: z.infer<typeof bookSlotSchema>) {
   const parsed = bookSlotSchema.safeParse(input);
@@ -50,11 +205,14 @@ export async function bookSlotAppointment(input: z.infer<typeof bookSlotSchema>)
 
   const { data: slot, error: slotErr } = await supabase
     .from("availability_slots")
-    .select("id, start_time, end_time")
+    .select("id, start_time, end_time, archived_at")
     .eq("id", parsed.data.slotId)
     .maybeSingle();
 
   if (slotErr || !slot) return { error: "This time slot is no longer available." };
+  if ((slot as { archived_at?: string | null }).archived_at) {
+    return { error: "This time slot is no longer available." };
+  }
 
   const start = new Date(slot.start_time);
   const end = new Date(slot.end_time);
@@ -65,6 +223,7 @@ export async function bookSlotAppointment(input: z.infer<typeof bookSlotSchema>)
     .select("id")
     .eq("patient_id", user.id)
     .neq("status", "cancelled")
+    .is("archived_at", null)
     .lt("start_time", end.toISOString())
     .gt("end_time", start.toISOString())
     .limit(1)
@@ -72,50 +231,20 @@ export async function bookSlotAppointment(input: z.infer<typeof bookSlotSchema>)
 
   if (overlap) return { error: "You already have an appointment overlapping this time." };
 
-  const admin = createServiceClient();
-  const { data: tok } = await admin
-    .from("user_google_tokens")
-    .select("encrypted_refresh_token, token_iv, auth_tag")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  let googleEventId: string | null = null;
-
-  if (tok) {
-    try {
-      const refresh = decryptRefreshToken(
-        tok.encrypted_refresh_token,
-        tok.token_iv,
-        tok.auth_tag
-      );
-      const clinic = process.env.CLINIC_CALENDAR_EMAIL?.trim() || null;
-      const cal = await createCalendarEventWithMeet({
-        refreshToken: refresh,
-        summary: `MaternalCare Sync — ${parsed.data.appointmentType}`,
-        description:
-          "Prenatal visit via MaternalCare Sync. Calendar will email you 24 hours before this visit.",
-        startIso: start.toISOString(),
-        endIso: end.toISOString(),
-        patientEmail: user.email,
-        clinicEmail: clinic,
-        telehealth: parsed.data.telehealth,
-      });
-      googleEventId = cal.eventId || null;
-    } catch (e) {
-      console.error("Calendar sync failed:", e);
-    }
-  }
-
-  const { error: insertErr } = await supabase.from("appointments").insert({
-    patient_id: user.id,
-    slot_id: parsed.data.slotId,
-    start_time: start.toISOString(),
-    end_time: end.toISOString(),
-    status: "scheduled",
-    appointment_type: parsed.data.appointmentType,
-    is_telehealth: parsed.data.telehealth,
-    google_event_id: googleEventId,
-  });
+  const { data: inserted, error: insertErr } = await supabase
+    .from("appointments")
+    .insert({
+      patient_id: user.id,
+      slot_id: parsed.data.slotId,
+      start_time: start.toISOString(),
+      end_time: end.toISOString(),
+      status: "pending",
+      appointment_type: parsed.data.appointmentType,
+      is_telehealth: parsed.data.telehealth,
+      google_event_id: null,
+      patient_email: user.email,
+    })
+    .select("id");
 
   if (insertErr) {
     const code = "code" in insertErr ? String((insertErr as { code?: string }).code) : "";
@@ -125,29 +254,53 @@ export async function bookSlotAppointment(input: z.infer<typeof bookSlotSchema>)
     return { error: insertErr.message };
   }
 
-  // Inform the patient immediately via EmailJS (in addition to Google Calendar emails).
+  const insertedId = inserted?.[0]?.id ?? null;
+  if (!insertedId) {
+    return { error: "Booking created, but confirmation could not be tracked." };
+  }
+
+  const hasGmail =
+    Boolean(process.env.GMAIL_USER?.trim()) && Boolean(process.env.GMAIL_APP_PASSWORD?.trim());
+
+  if (!hasGmail) {
+    console.warn(
+      "[mail] Booking saved but email skipped: set GMAIL_USER and GMAIL_APP_PASSWORD in .env.local and restart dev."
+    );
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/appointments");
+    return { ok: true as const, emailSent: false, emailIssue: "missing_env" as const };
+  }
+
   try {
-    if (process.env.EMAILJS_TEMPLATE_BOOKING_CONFIRMED) {
-      const when = start.toLocaleString(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      });
-      await sendEmailJS({
-        toEmail: user.email,
-        templateId: process.env.EMAILJS_TEMPLATE_BOOKING_CONFIRMED,
-        templateParams: {
-          patient_name: profile?.full_name ?? "there",
-          appointment_type: parsed.data.appointmentType,
-          appointment_time: when,
-          telehealth: parsed.data.telehealth ? "Yes" : "No",
-        },
-      });
-    }
+    const displayName = (profile?.full_name ?? "").trim() || "there";
+    const dateFormatted = formatLongDate(start);
+    const timeFormatted = formatTime(start);
+    const visitType = parsed.data.appointmentType.trim();
+    const body = [
+      `Good morning ${displayName}, your booking for ${visitType} on ${dateFormatted} at ${timeFormatted} was successful.`,
+      "",
+      "We have received your request and will email you again once it has been approved by the clinic.",
+      "",
+      "Thank you,",
+      "MaternalCare",
+    ].join("\n");
+    await sendMail({
+      to: user.email,
+      subject: "MaternalCare — booking received",
+      text: body,
+    });
+    await supabase
+      .from("appointments")
+      .update({ booking_confirmation_sent_at: new Date().toISOString() })
+      .eq("id", insertedId);
   } catch (e) {
-    // Booking should succeed even if email delivery fails.
-    console.error("EmailJS booking email failed:", e);
+    console.error("[mail] Booking notification email failed:", e);
+    revalidatePath("/dashboard");
+    revalidatePath("/dashboard/appointments");
+    return { ok: true as const, emailSent: false, emailIssue: "smtp_failed" as const };
   }
 
   revalidatePath("/dashboard");
-  return { ok: true };
+  revalidatePath("/dashboard/appointments");
+  return { ok: true as const, emailSent: true };
 }

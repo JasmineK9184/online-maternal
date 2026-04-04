@@ -82,6 +82,45 @@ export async function updateAvailabilitySlot(input: z.infer<typeof updateSchema>
   return { ok: true };
 }
 
+const idOnlySchema = z.object({ id: z.string().uuid() });
+
+/** Soft-hide slot from patient booking; existing appointments unchanged. */
+export async function archiveAvailabilitySlot(input: z.infer<typeof idOnlySchema>) {
+  const parsed = idOnlySchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.flatten().fieldErrors };
+
+  const gate = await requireAdmin();
+  if (gate.error || !gate.supabase) return { error: gate.error ?? "Forbidden" };
+
+  const { error } = await gate.supabase
+    .from("availability_slots")
+    .update({ archived_at: new Date().toISOString() })
+    .eq("id", parsed.data.id);
+
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/availability");
+  revalidatePath("/dashboard", "layout");
+  return { ok: true };
+}
+
+export async function restoreAvailabilitySlot(input: z.infer<typeof idOnlySchema>) {
+  const parsed = idOnlySchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.flatten().fieldErrors };
+
+  const gate = await requireAdmin();
+  if (gate.error || !gate.supabase) return { error: gate.error ?? "Forbidden" };
+
+  const { error } = await gate.supabase
+    .from("availability_slots")
+    .update({ archived_at: null })
+    .eq("id", parsed.data.id);
+
+  if (error) return { error: error.message };
+  revalidatePath("/dashboard/availability");
+  revalidatePath("/dashboard", "layout");
+  return { ok: true };
+}
+
 const deleteSchema = z.object({ id: z.string().uuid() });
 
 export async function deleteAvailabilitySlot(input: z.infer<typeof deleteSchema>) {

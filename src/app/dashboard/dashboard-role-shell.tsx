@@ -18,11 +18,23 @@ export default async function DashboardRoleShell({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: profile } = await supabase
+  const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
+
+  const { data: archiveRow, error: archiveErr } = await supabase
     .from("profiles")
-    .select("role")
+    .select("archived_at")
     .eq("id", user.id)
-    .single();
+    .maybeSingle();
+
+  const archivedAt =
+    !archiveErr && archiveRow && "archived_at" in archiveRow
+      ? (archiveRow as { archived_at: string | null }).archived_at
+      : null;
+
+  if (archivedAt) {
+    await supabase.auth.signOut();
+    redirect("/login?archived=1");
+  }
 
   const isAdmin = profile?.role === "admin";
   return <DashboardShell isAdmin={isAdmin}>{children}</DashboardShell>;

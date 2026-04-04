@@ -1,6 +1,7 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Suspense } from "react";
 import { saveProfileForm } from "@/app/actions/profile";
+import { HealthProfileSavedToast } from "./health-profile-saved-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -35,6 +36,10 @@ export default async function HealthProfilePage({
 
   return (
     <div className="space-y-8">
+      <Suspense fallback={null}>
+        <HealthProfileSavedToast />
+      </Suspense>
+
       <div>
         <h1 className="font-serif text-3xl font-semibold tracking-tight text-foreground">
           Health profile
@@ -44,14 +49,6 @@ export default async function HealthProfilePage({
         </p>
       </div>
 
-      {sp.saved === "1" && (
-        <p
-          className="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-foreground"
-          role="status"
-        >
-          Profile saved.
-        </p>
-      )}
       {sp.error && (
         <p
           className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
@@ -118,15 +115,6 @@ export default async function HealthProfilePage({
           </form>
         </CardContent>
       </Card>
-
-      <p className="text-sm text-muted-foreground">
-        <Link
-          href="/dashboard"
-          className="underline decoration-primary/40 underline-offset-2"
-        >
-          ← Dashboard
-        </Link>
-      </p>
     </div>
   );
 }

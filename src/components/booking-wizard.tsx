@@ -4,13 +4,11 @@ import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { bookSlotAppointment, getOpenSlots } from "@/app/actions/slots";
+import { requestAppointmentBooking } from "@/app/actions/slots";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
 import {
   primarySuggestionBubble,
   SUGGESTION_LABELS,
@@ -19,9 +17,10 @@ import {
 } from "@/lib/maternal";
 
 const schema = z.object({
-  appointmentType: z.string().min(1),
+  appointmentType: z.string().min(1, "Enter a visit type"),
   telehealth: z.boolean(),
-  slotId: z.string().uuid().optional(),
+  preferredStart: z.string().min(1, "Choose a date and time"),
+  durationMinutes: z.coerce.number().int().min(15).max(240),
 });
 
 type Form = z.infer<typeof schema>;
@@ -30,78 +29,73 @@ type Props = {
   currentWeek: number | null;
 };
 
-function formatSlotDate(iso: string) {
-  const d = new Date(iso);
-  return {
-    line1: d.toLocaleDateString(undefined, {
-      weekday: "long",
-      month: "short",
-      day: "numeric",
-    }),
-    line2: d.toLocaleTimeString(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    }),
-  };
+function datetimeLocalMinNow() {
+  const d = new Date();
+  d.setSeconds(0, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 export function BookingWizard({ currentWeek }: Props) {
-  const queryClient = useQueryClient();
   const suggestions = useMemo(
     () => suggestedAppointmentTypes(currentWeek),
     [currentWeek]
   );
   const contextBubble = primarySuggestionBubble(currentWeek);
+  const minPreferred = useMemo(() => datetimeLocalMinNow(), []);
 
   const [step, setStep] = useState(0);
   const [msg, setMsg] = useState<string | null>(null);
-
-  const { data: slots = [], isLoading, error: slotsError } = useQuery({
-    queryKey: ["open-slots"],
-    queryFn: async () => {
-      const r = await getOpenSlots();
-      if (r.error) throw new Error(r.error);
-      return r.slots;
-    },
-    refetchInterval: 30_000,
-    staleTime: 10_000,
-  });
 
   const form = useForm<Form>({
     resolver: zodResolver(schema),
     defaultValues: {
       appointmentType: "",
       telehealth: false,
-      slotId: undefined,
+      preferredStart: "",
+      durationMinutes: 30,
     },
   });
 
   const appointmentType = form.watch("appointmentType");
-  const selectedSlotId = form.watch("slotId");
 
   async function onSubmit(data: Form) {
     setMsg(null);
-    if (!data.appointmentType?.trim()) {
-      setMsg("Choose a visit type first.");
+    const start = new Date(data.preferredStart);
+    if (Number.isNaN(start.getTime())) {
+      setMsg("That date and time is not valid.");
       return;
     }
-    if (!data.slotId) {
-      setMsg("Choose an available time slot.");
-      return;
-    }
-    const res = await bookSlotAppointment({
-      slotId: data.slotId,
-      appointmentType: data.appointmentType,
+    const res = await requestAppointmentBooking({
+      appointmentType: data.appointmentType.trim(),
       telehealth: data.telehealth,
+      startIso: start.toISOString(),
+      durationMinutes: data.durationMinutes,
     });
     if ("error" in res && res.error) {
-      setMsg(typeof res.error === "string" ? res.error : "Could not book");
+      setMsg(typeof res.error === "string" ? res.error : "Could not submit your request");
       return;
     }
-    setMsg("Booked! Check Gmail and Google Calendar for your invite and reminders.");
-    form.reset({ appointmentType: "", telehealth: false, slotId: undefined });
+    if ("emailSent" in res && res.emailSent) {
+      setMsg(
+        "Request received! Check your inbox for a confirmation email (and spam). The clinic will review your preferred time and email you again after approval."
+      );
+    } else if ("emailIssue" in res && res.emailIssue === "missing_env") {
+      setMsg(
+        "Your request was saved in the system. No email was sent because this server is missing GMAIL_USER or GMAIL_APP_PASSWORD. Add both to .env.local in the project root, then stop and restart npm run dev."
+      );
+    } else {
+      setMsg(
+        "Your request was saved. Gmail SMTP failed. If the terminal shows \"self-signed certificate in certificate chain\", antivirus or a proxy is intercepting TLS — try GMAIL_TLS_REJECT_UNAUTHORIZED=0 in .env.local (dev only), or disable email SSL scanning. Otherwise try GMAIL_SMTP_PORT=587 and verify your app password."
+      );
+    }
+    form.reset({
+      appointmentType: "",
+      telehealth: false,
+      preferredStart: "",
+      durationMinutes: 30,
+    });
     setStep(0);
-    await queryClient.invalidateQueries({ queryKey: ["open-slots"] });
   }
 
   function applySuggestion(key: SuggestionKey) {
@@ -113,8 +107,8 @@ export function BookingWizard({ currentWeek }: Props) {
       <CardHeader>
         <CardTitle className="text-primary">Book a visit</CardTitle>
         <p className="text-sm font-normal text-muted-foreground">
-          Choose how you&apos;d like to be seen, then pick a time. Slots update in real
-          time.
+          Choose your visit type, then pick when you&apos;d like to come in. Your request stays{" "}
+          <span className="font-medium text-foreground">pending</span> until the clinic approves it.
         </p>
       </CardHeader>
       <CardContent>
@@ -145,8 +139,13 @@ export function BookingWizard({ currentWeek }: Props) {
                   id="type"
                   className="rounded-xl"
                   {...form.register("appointmentType")}
-                  placeholder="e.g. Anatomy scan"
+                  placeholder="e.g. Weekly checkup, ultrasound"
                 />
+                {form.formState.errors.appointmentType && (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.appointmentType.message}
+                  </p>
+                )}
               </div>
               <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-border/60 bg-muted/30 px-4 py-3 text-sm">
                 <input
@@ -154,7 +153,7 @@ export function BookingWizard({ currentWeek }: Props) {
                   className="rounded border-input"
                   {...form.register("telehealth")}
                 />
-                <span>Telehealth visit (adds Google Meet)</span>
+                <span>Telehealth visit (adds Google Meet after approval)</span>
               </label>
               <Button
                 type="button"
@@ -166,7 +165,7 @@ export function BookingWizard({ currentWeek }: Props) {
                   setStep(1);
                 }}
               >
-                Next — choose a time
+                Next — date &amp; time
               </Button>
             </div>
           )}
@@ -174,72 +173,44 @@ export function BookingWizard({ currentWeek }: Props) {
             <div className="space-y-4">
               <div className="space-y-3">
                 <div className="flex flex-wrap items-end justify-between gap-2">
-                  <Label className="text-base">Available times</Label>
+                  <Label htmlFor="preferred-start" className="text-base">
+                    Preferred date &amp; time
+                  </Label>
                   {contextBubble && (
                     <span className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
                       Suggested now: {contextBubble}
                     </span>
                   )}
                 </div>
-                {slotsError && (
-                  <p className="text-sm text-destructive">Could not load slots.</p>
-                )}
-                {isLoading && (
-                  <p className="text-sm text-muted-foreground">Loading times…</p>
-                )}
-                {!isLoading && slots.length === 0 && (
-                  <p className="rounded-2xl bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-                    No open times right now. Your clinic can add slots in the admin
-                    panel.
+                <Input
+                  id="preferred-start"
+                  type="datetime-local"
+                  min={minPreferred}
+                  className="rounded-xl"
+                  {...form.register("preferredStart")}
+                />
+                {form.formState.errors.preferredStart && (
+                  <p className="text-xs text-destructive">
+                    {form.formState.errors.preferredStart.message}
                   </p>
                 )}
-                <div className="grid max-h-[min(420px,55vh)] gap-3 overflow-y-auto pr-1 sm:grid-cols-2">
-                  {slots.map((s) => {
-                    const selected = selectedSlotId === s.id;
-                    const { line1, line2 } = formatSlotDate(s.start_time);
-                    const endT = new Date(s.end_time).toLocaleTimeString(undefined, {
-                      hour: "numeric",
-                      minute: "2-digit",
-                    });
-                    return (
-                      <label
-                        key={s.id}
-                        className={cn(
-                          "relative cursor-pointer rounded-2xl border-2 bg-card p-4 shadow-card transition-all hover:shadow-card-hover",
-                          selected
-                            ? "border-primary bg-primary/[0.06] ring-2 ring-primary/20"
-                            : "border-transparent ring-1 ring-border/40"
-                        )}
-                      >
-                        <input
-                          type="radio"
-                          value={s.id}
-                          className="sr-only"
-                          {...form.register("slotId")}
-                        />
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                          <div>
-                            <p className="font-serif text-lg font-semibold leading-tight text-foreground sm:text-xl">
-                              {line1}
-                            </p>
-                            <p className="mt-1 text-sm font-medium text-primary">
-                              {line2} – {endT}
-                            </p>
-                            {s.label && (
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                {s.label}
-                              </p>
-                            )}
-                          </div>
-                          {contextBubble && (
-                            <span className="shrink-0 self-start rounded-full bg-rose-soft px-2.5 py-1 text-[11px] font-medium leading-tight text-rose-foreground">
-                              {contextBubble}
-                            </span>
-                          )}
-                        </div>
-                      </label>
-                    );
-                  })}
+                <p className="text-xs text-muted-foreground">
+                  The clinic may confirm this time or suggest an alternative after approval.
+                </p>
+
+                <div className="space-y-2 pt-2">
+                  <Label htmlFor="duration">Visit length</Label>
+                  <select
+                    id="duration"
+                    className="flex h-10 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600/30 focus-visible:ring-offset-2"
+                    {...form.register("durationMinutes", { valueAsNumber: true })}
+                  >
+                    <option value={15}>15 minutes</option>
+                    <option value={30}>30 minutes</option>
+                    <option value={45}>45 minutes</option>
+                    <option value={60}>60 minutes</option>
+                    <option value={90}>90 minutes</option>
+                  </select>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -251,17 +222,8 @@ export function BookingWizard({ currentWeek }: Props) {
                 >
                   Back
                 </Button>
-                  <Button
-                    type="submit"
-                    className="rounded-full"
-                    disabled={
-                      !slots.length ||
-                      isLoading ||
-                      !selectedSlotId ||
-                      !appointmentType?.trim()
-                    }
-                  >
-                  Confirm booking
+                <Button type="submit" className="rounded-full">
+                  Submit request
                 </Button>
               </div>
             </div>

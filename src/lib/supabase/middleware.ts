@@ -30,6 +30,8 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  await supabase.auth.getUser();
+  // Prefer getSession() here: it refreshes the session from cookies without the extra
+  // Auth server round-trip that getUser() does on every navigation (faster sign-in / routing).
+  await supabase.auth.getSession();
   return supabaseResponse;
 }

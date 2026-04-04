@@ -23,6 +23,7 @@ export async function GET(request: Request) {
     .from("appointments")
     .select("id, patient_id, start_time, appointment_type, reminder_sent_at")
     .eq("status", "scheduled")
+    .is("archived_at", null)
     .is("reminder_sent_at", null)
     .gte("start_time", windowStart.toISOString())
     .lte("start_time", windowEnd.toISOString());

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { encryptRefreshToken } from "@/lib/crypto";
 import { createServiceClient } from "@/lib/supabase/admin";
 import { hasSupabaseEnv } from "@/lib/supabase/env";
@@ -20,19 +20,22 @@ export async function GET(request: Request) {
       const refresh = data.session.provider_refresh_token;
       const userId = data.session.user.id;
       if (refresh && userId) {
-        try {
-          const enc = encryptRefreshToken(refresh);
-          const admin = createServiceClient();
-          await admin.from("user_google_tokens").upsert({
-            user_id: userId,
-            encrypted_refresh_token: enc.ciphertext,
-            token_iv: enc.iv,
-            auth_tag: enc.authTag,
-            updated_at: new Date().toISOString(),
-          });
-        } catch (e) {
-          console.error("Token store failed:", e);
-        }
+        // Don’t block the redirect on DB + encryption; that was adding long waits after Google OAuth.
+        after(async () => {
+          try {
+            const enc = encryptRefreshToken(refresh);
+            const admin = createServiceClient();
+            await admin.from("user_google_tokens").upsert({
+              user_id: userId,
+              encrypted_refresh_token: enc.ciphertext,
+              token_iv: enc.iv,
+              auth_tag: enc.authTag,
+              updated_at: new Date().toISOString(),
+            });
+          } catch (e) {
+            console.error("Token store failed:", e);
+          }
+        });
       }
     }
   }
