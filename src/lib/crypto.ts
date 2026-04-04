@@ -3,7 +3,6 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "crypt
 const ALGO = "aes-256-gcm";
 const IV_LEN = 16;
 const KEY_LEN = 32;
-const TAG_LEN = 16;
 
 function getKey(): Buffer {
   const secret = process.env.TOKEN_ENCRYPTION_KEY;

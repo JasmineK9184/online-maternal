@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { SupabaseSetupNotice } from "@/components/supabase-setup-notice";
@@ -141,13 +142,13 @@ export default async function Home() {
         <section id="about" className="border-b border-gray-100/80 bg-[#FBF9F6] py-16 sm:py-24">
           <div className="mx-auto grid max-w-6xl gap-10 px-4 sm:grid-cols-2 sm:gap-12 sm:px-6 lg:items-center">
             <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-[0_8px_30px_rgb(0,0,0,0.04)]">
-              <img
+              <Image
                 src="https://images.unsplash.com/photo-1596464716127-f2a82984de30?q=80&w=1200&auto=format&fit=crop"
                 alt="Mother gently holding her infant — warm, welcoming care"
                 width={800}
                 height={600}
                 className="aspect-[4/3] h-auto w-full object-cover"
-                loading="lazy"
+                sizes="(max-width: 640px) 100vw, 50vw"
               />
             </div>
             <div>
