@@ -37,7 +37,7 @@ export async function selectAppointmentRowWithArchiveFallback<
   selectWithArchivedAt: string,
   selectWithoutArchivedAt: string
 ): Promise<{ data: (T & { archived_at?: string | null }) | null; error: { message?: string } | null }> {
-  let res = await supabase
+  const res = await supabase
     .from("appointments")
     .select(selectWithArchivedAt)
     .eq("id", appointmentId)
