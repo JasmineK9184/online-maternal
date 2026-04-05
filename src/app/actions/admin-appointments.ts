@@ -3,6 +3,7 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { selectAppointmentRowWithArchiveFallback } from "@/lib/active-patients-query";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/admin";
 import { decryptRefreshToken } from "@/lib/crypto";
@@ -86,13 +87,12 @@ export async function approveAppointment(formData: FormData) {
     redirect(`${returnBase}?error=${encodeURIComponent(gate.error ?? "Forbidden")}`);
   }
 
-  const appt = await gate.supabase
-    .from("appointments")
-    .select(
-      "id, patient_id, patient_email, start_time, end_time, appointment_type, is_telehealth, google_event_id, status, booking_approved_sent_at, archived_at"
-    )
-    .eq("id", parsed.data.appointmentId)
-    .single();
+  const appt = await selectAppointmentRowWithArchiveFallback(
+    gate.supabase,
+    parsed.data.appointmentId,
+    "id, patient_id, patient_email, start_time, end_time, appointment_type, is_telehealth, google_event_id, status, booking_approved_sent_at, archived_at",
+    "id, patient_id, patient_email, start_time, end_time, appointment_type, is_telehealth, google_event_id, status, booking_approved_sent_at"
+  );
 
   if (appt.error || !appt.data) {
     redirect(
@@ -237,13 +237,12 @@ export async function rejectAppointment(formData: FormData) {
     redirect(`${returnBase}?error=${encodeURIComponent(gate.error ?? "Forbidden")}`);
   }
 
-  const appt = await gate.supabase
-    .from("appointments")
-    .select(
-      "id, patient_id, patient_email, start_time, end_time, appointment_type, is_telehealth, status, archived_at"
-    )
-    .eq("id", parsed.data.appointmentId)
-    .single();
+  const appt = await selectAppointmentRowWithArchiveFallback(
+    gate.supabase,
+    parsed.data.appointmentId,
+    "id, patient_id, patient_email, start_time, end_time, appointment_type, is_telehealth, status, archived_at",
+    "id, patient_id, patient_email, start_time, end_time, appointment_type, is_telehealth, status"
+  );
 
   if (appt.error || !appt.data) {
     redirect(

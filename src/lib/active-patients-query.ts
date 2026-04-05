@@ -26,6 +26,43 @@ export async function withArchivedAtFilterFallback<T>(
 }
 
 /**
+ * Fetches one appointment row including `archived_at` when the column exists.
+ * If `appointments.archived_at` was never migrated, retries without it (treat as not archived).
+ */
+export async function selectAppointmentRowWithArchiveFallback<
+  T extends Record<string, unknown> = Record<string, unknown>,
+>(
+  supabase: SupabaseClient,
+  appointmentId: string,
+  selectWithArchivedAt: string,
+  selectWithoutArchivedAt: string
+): Promise<{ data: (T & { archived_at?: string | null }) | null; error: { message?: string } | null }> {
+  let res = await supabase
+    .from("appointments")
+    .select(selectWithArchivedAt)
+    .eq("id", appointmentId)
+    .single();
+
+  if (res.error && isMissingArchivedAtSchemaError(res.error)) {
+    const fb = await supabase
+      .from("appointments")
+      .select(selectWithoutArchivedAt)
+      .eq("id", appointmentId)
+      .single();
+    if (fb.error) return { data: null, error: fb.error };
+    return {
+      data: fb.data ? ({ ...fb.data, archived_at: null } as T & { archived_at?: string | null }) : null,
+      error: null,
+    };
+  }
+
+  return {
+    data: res.data as (T & { archived_at?: string | null }) | null,
+    error: res.error,
+  };
+}
+
+/**
  * Lists patient profiles excluding archived rows when `archived_at` exists.
  * If the column is not migrated yet, falls back to all patients (no filter).
  */
