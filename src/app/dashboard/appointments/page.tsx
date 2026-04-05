@@ -7,6 +7,10 @@ import {
 } from "@/components/dashboard/admin-appointments-table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  isMissingArchivedAtSchemaError,
+  withArchivedAtFilterFallback,
+} from "@/lib/active-patients-query";
 import { hasSupabaseEnv } from "@/lib/supabase/env";
 import { createClient } from "@/lib/supabase/server";
 import { pregnancyWeekFromProfile } from "@/lib/maternal";
@@ -67,16 +71,18 @@ export default async function AppointmentsPage({
   const isAdmin = profile?.role === "admin";
 
   if (isAdmin) {
-    const { data: allAppts, error: apptsErr } = await supabase
-      .from("appointments")
-      .select(
-        "id, patient_id, start_time, end_time, status, appointment_type, patient_email, is_telehealth, created_at"
-      )
-      .is("archived_at", null)
-      .order("start_time", { ascending: true });
-
-    if (apptsErr) {
-      console.error("[appointments] admin list:", apptsErr.message);
+    const apptsRes = await withArchivedAtFilterFallback(async (filterArchived) => {
+      let q = supabase
+        .from("appointments")
+        .select(
+          "id, patient_id, start_time, end_time, status, appointment_type, patient_email, is_telehealth, created_at"
+        );
+      if (filterArchived) q = q.is("archived_at", null);
+      return q.order("start_time", { ascending: true });
+    });
+    const allAppts = apptsRes.data;
+    if (apptsRes.error && !isMissingArchivedAtSchemaError(apptsRes.error)) {
+      console.error("[appointments] admin list:", apptsRes.error.message);
     }
 
     const list = allAppts ?? [];

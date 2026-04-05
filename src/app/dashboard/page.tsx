@@ -7,7 +7,11 @@ import { PatientJourneyView } from "@/components/dashboard/patient-journey-view"
 import { SupabaseSetupNotice } from "@/components/supabase-setup-notice";
 import { hasSupabaseEnv } from "@/lib/supabase/env";
 import { createClient } from "@/lib/supabase/server";
-import { fetchActivePatientProfiles } from "@/lib/active-patients-query";
+import {
+  fetchActivePatientProfiles,
+  isMissingArchivedAtSchemaError,
+  withArchivedAtFilterFallback,
+} from "@/lib/active-patients-query";
 import { pregnancyWeekFromProfile } from "@/lib/maternal";
 
 export default async function DashboardPage() {
@@ -45,25 +49,25 @@ export default async function DashboardPage() {
       "id, created_at, start_time, end_time, appointment_type, status, patient_id, patient_email, is_telehealth" as const;
 
     const [pendingApptsRes, recentApptsRes, todaysApptsRes, patients] = await Promise.all([
-      supabase
-        .from("appointments")
-        .select(apptSelect)
-        .eq("status", "pending")
-        .is("archived_at", null)
-        .order("start_time", { ascending: true }),
-      supabase
-        .from("appointments")
-        .select(apptSelect)
-        .is("archived_at", null)
-        .order("created_at", { ascending: false })
-        .limit(35),
-      supabase
-        .from("appointments")
-        .select(apptSelect)
-        .is("archived_at", null)
-        .gte("start_time", todayStart)
-        .lt("start_time", tomorrowStart)
-        .order("start_time", { ascending: true }),
+      withArchivedAtFilterFallback(async (filterArchived) => {
+        let q = supabase.from("appointments").select(apptSelect).eq("status", "pending");
+        if (filterArchived) q = q.is("archived_at", null);
+        return q.order("start_time", { ascending: true });
+      }),
+      withArchivedAtFilterFallback(async (filterArchived) => {
+        let q = supabase.from("appointments").select(apptSelect);
+        if (filterArchived) q = q.is("archived_at", null);
+        return q.order("created_at", { ascending: false }).limit(35);
+      }),
+      withArchivedAtFilterFallback(async (filterArchived) => {
+        let q = supabase
+          .from("appointments")
+          .select(apptSelect)
+          .gte("start_time", todayStart)
+          .lt("start_time", tomorrowStart);
+        if (filterArchived) q = q.is("archived_at", null);
+        return q.order("start_time", { ascending: true });
+      }),
       fetchActivePatientProfiles<{
         id: string;
         full_name: string | null;
@@ -72,6 +76,16 @@ export default async function DashboardPage() {
         lmp_date: string | null;
       }>(supabase, "id, full_name, phone, due_date, lmp_date"),
     ]);
+
+    for (const [label, res] of [
+      ["pending appointments", pendingApptsRes],
+      ["recent appointments", recentApptsRes],
+      ["today's appointments", todaysApptsRes],
+    ] as const) {
+      if (res.error && !isMissingArchivedAtSchemaError(res.error)) {
+        console.error(`[dashboard] ${label}:`, res.error.message);
+      }
+    }
     const todaysRaw = todaysApptsRes.data ?? [];
     const todaysNonCancelled = todaysRaw.filter((a) => a.status !== "cancelled");
     const pendingRaw = pendingApptsRes.data ?? [];

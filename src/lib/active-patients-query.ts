@@ -9,6 +9,22 @@ export function isMissingArchivedAtSchemaError(err: { message?: string } | null 
   );
 }
 
+type SupabaseMaybeResult<T> = { data: T | null; error: { message?: string } | null };
+
+/**
+ * For queries that use `.is("archived_at", null)` on `appointments` (or similar).
+ * If the column was never migrated, PostgREST errors; retry without the filter so lists still load.
+ */
+export async function withArchivedAtFilterFallback<T>(
+  run: (filterArchivedRows: boolean) => Promise<SupabaseMaybeResult<T>>
+): Promise<SupabaseMaybeResult<T>> {
+  let res = await run(true);
+  if (res.error && isMissingArchivedAtSchemaError(res.error)) {
+    res = await run(false);
+  }
+  return res;
+}
+
 /**
  * Lists patient profiles excluding archived rows when `archived_at` exists.
  * If the column is not migrated yet, falls back to all patients (no filter).
