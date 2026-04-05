@@ -50,8 +50,9 @@ export async function selectAppointmentRowWithArchiveFallback<
       .eq("id", appointmentId)
       .single();
     if (fb.error) return { data: null, error: fb.error };
+    const row = fb.data as unknown as (T & { archived_at?: string | null }) | null;
     return {
-      data: fb.data ? ({ ...fb.data, archived_at: null } as T & { archived_at?: string | null }) : null,
+      data: row != null ? { ...row, archived_at: null } : null,
       error: null,
     };
   }

@@ -71,6 +71,32 @@ const approveSchema = z.object({
   appointmentId: z.string().uuid(),
 });
 
+type AppointmentRowForApprove = {
+  id: string;
+  patient_id: string;
+  patient_email: string | null;
+  start_time: string;
+  end_time: string;
+  appointment_type: string;
+  is_telehealth: boolean;
+  google_event_id: string | null;
+  status: string;
+  booking_approved_sent_at: string | null;
+  archived_at?: string | null;
+};
+
+type AppointmentRowForReject = {
+  id: string;
+  patient_id: string;
+  patient_email: string | null;
+  start_time: string;
+  end_time: string;
+  appointment_type: string;
+  is_telehealth: boolean;
+  status: string;
+  archived_at?: string | null;
+};
+
 export async function approveAppointment(formData: FormData) {
   const returnBase = safeReturnTo(String(formData.get("returnTo") ?? ""));
 
@@ -87,7 +113,7 @@ export async function approveAppointment(formData: FormData) {
     redirect(`${returnBase}?error=${encodeURIComponent(gate.error ?? "Forbidden")}`);
   }
 
-  const appt = await selectAppointmentRowWithArchiveFallback(
+  const appt = await selectAppointmentRowWithArchiveFallback<AppointmentRowForApprove>(
     gate.supabase,
     parsed.data.appointmentId,
     "id, patient_id, patient_email, start_time, end_time, appointment_type, is_telehealth, google_event_id, status, booking_approved_sent_at, archived_at",
@@ -237,7 +263,7 @@ export async function rejectAppointment(formData: FormData) {
     redirect(`${returnBase}?error=${encodeURIComponent(gate.error ?? "Forbidden")}`);
   }
 
-  const appt = await selectAppointmentRowWithArchiveFallback(
+  const appt = await selectAppointmentRowWithArchiveFallback<AppointmentRowForReject>(
     gate.supabase,
     parsed.data.appointmentId,
     "id, patient_id, patient_email, start_time, end_time, appointment_type, is_telehealth, status, archived_at",
